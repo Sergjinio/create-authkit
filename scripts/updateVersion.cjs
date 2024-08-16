@@ -1,23 +1,22 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+// Improved Code
+
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 
 const packagesPath = path.join(__dirname, '../examples');
 const packages = fs.readdirSync(packagesPath).filter((file) => {
   return fs.statSync(path.join(packagesPath, file)).isDirectory();
 });
 
-(async () => {
-  console.log('--START--');
-
-  const loadPkgData = async (page) => {
+const loadPackageData = async (page) => {
+  try {
     const response = await axios.get('https://www.npmjs.com/search', {
       params: {
         q: '@particle-network',
         perPage: 20,
         page: page,
-        timestamp: new Date().getTime(),
+        timestamp: Date.now(),
       },
       headers: {
         authority: 'www.npmjs.com',
@@ -38,44 +37,60 @@ const packages = fs.readdirSync(packagesPath).filter((file) => {
         'x-spiferack': '1',
       },
     });
-    const reuslt = response.data.objects.map((item) => ({
-      name: item.package.name,
-      version: item.package.version,
-    }));
+
     return {
       total: response.data.total,
-      result: reuslt,
+      results: response.data.objects.map((item) => ({
+        name: item.package.name,
+        version: item.package.version,
+      })),
     };
-  };
+  } catch (error) {
+    throw new Error(`Failed to load package data on page ${page}: ${error.message}`);
+  }
+};
+
+const updatePackageJson = (pkg, newVersions) => {
+  const srcPath = path.join(packagesPath, `./${pkg}/package.json`);
+  let packageContent = fs.readFileSync(srcPath, 'utf8');
+
+  newVersions.forEach(({ name, version }) => {
+    const reg = new RegExp(`"${name}": ".*?"`, 'g');
+    packageContent = packageContent.replace(reg, (substring) => {
+      const replacement = `"${name}": "^${version}"`;
+      console.log(`${pkg}: ${substring} -> ${replacement}`);
+      return replacement;
+    });
+  });
+
+  fs.writeFileSync(srcPath, packageContent);
+};
+
+(async () => {
+  console.log('--START--');
+
   try {
     const newVersions = [];
-    const response = await loadPkgData(0);
-    newVersions.push(...response.result);
+    const firstPageResponse = await loadPackageData(0);
+    newVersions.push(...firstPageResponse.results);
 
-    if (response.total > 20) {
-      const pages = Math.ceil(response.total / 20);
-      for (let i = 1; i < pages; i++) {
-        const response = await loadPkgData(i);
-        newVersions.push(...response.result);
+    const totalPackages = firstPageResponse.total;
+    const totalPages = Math.ceil(totalPackages / 20);
+
+    if (totalPages > 1) {
+      for (let i = 1; i < totalPages; i++) {
+        const response = await loadPackageData(i);
+        newVersions.push(...response.results);
       }
     }
 
     packages.forEach((pkg) => {
-      const srcPath = path.join(packagesPath, `./${pkg}/package.json`);
-      let packageContent = fs.readFileSync(srcPath, 'utf8');
-      newVersions.forEach(({ name, version }) => {
-        const reg = new RegExp(`"${name}": ".*"`, 'g');
-        packageContent = packageContent.replace(reg, (substring) => {
-          const replacement = `"${name}": "^${version}"`;
-          console.log(`${pkg}: ${substring} -> ${replacement}`);
-          return replacement;
-        });
-      });
-
-      fs.writeFileSync(srcPath, packageContent);
+      updatePackageJson(pkg, newVersions);
     });
+
   } catch (error) {
-    console.log(error);
+    console.error('An error occurred:', error.message);
   }
+
   console.log('--END--');
 })();
